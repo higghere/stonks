@@ -5,6 +5,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
+    "build": "prisma generate && tsc",
     "clean": "rimraf dist",
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
