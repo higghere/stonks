@@ -5,6 +5,7 @@ services:
     env: node
     plan: free
     buildCommand: npm install && npm run build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm run start -w apps/api
     envVars:
       - key: NODE_ENV
@@ -20,13 +21,13 @@ services:
           type: redis
           name: stock-market-redis
           property: connectionString
-
   # 2. Next.js Web Frontend (Web Service)
   - type: web
     name: stock-market-web
     env: node
     plan: free
     buildCommand: npm install && npm run build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm run start -w apps/web
     envVars:
       - key: NODE_ENV
@@ -35,13 +36,11 @@ services:
         value: 3000
       - key: NEXT_PUBLIC_API_URL
         value: https://stock-market-api.onrender.com
-
   # 3. Managed Redis Cache (Defined under services block in Render Spec)
   - type: redis
     name: stock-market-redis
     plan: free
     ipAllowList: [] # Only allow internal connection
-
 # 4. Managed PostgreSQL Database (Defined as top-level databases block)
 databases:
   - name: stock-market-db
