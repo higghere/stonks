@@ -218,13 +218,22 @@ async function startServer() {
       io.to(`interest:${quote.ticker}`).emit('price-update', quote);
     });
 
-    // 15-minute keep-alive terminal logging ping
-    setInterval(() => {
+    // 14-minute keep-alive self-ping (prevents Render free tier spin-down)
+    setInterval(async () => {
       const memUsage = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
       const activeConnections = io.sockets.sockets.size;
       const activeSymbols = QuoteInterestService.getInstance().getActiveSymbols().length;
       Logger.info(`[HEARTBEAT] API Gateway active. Memory: ${memUsage} MB, Active Connections: ${activeConnections}, Tracked Symbols: ${activeSymbols}`);
-    }, 15 * 60 * 1000);
+
+      // Self-ping to keep Render from spinning down
+      try {
+        const selfUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+        const res = await fetch(`${selfUrl}/health`);
+        Logger.info(`[HEARTBEAT] Self-ping status: ${res.status}`);
+      } catch (err) {
+        Logger.error('[HEARTBEAT] Self-ping failed', err);
+      }
+    }, 14 * 60 * 1000);
 
     server.listen(PORT, () => {
       Logger.info(`🚀 API Gateway active on port ${PORT} in ${config.get('NODE_ENV')} mode`);
