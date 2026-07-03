@@ -218,20 +218,30 @@ async function startServer() {
       io.to(`interest:${quote.ticker}`).emit('price-update', quote);
     });
 
-    // 14-minute keep-alive self-ping (prevents Render free tier spin-down)
+    // 14-minute keep-alive self-ping (prevents Render free tier spin-down for both API & Web)
     setInterval(async () => {
       const memUsage = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
       const activeConnections = io.sockets.sockets.size;
       const activeSymbols = QuoteInterestService.getInstance().getActiveSymbols().length;
       Logger.info(`[HEARTBEAT] API Gateway active. Memory: ${memUsage} MB, Active Connections: ${activeConnections}, Tracked Symbols: ${activeSymbols}`);
 
-      // Self-ping to keep Render from spinning down
+      // 1. Self-ping API Gateway to keep it awake
       try {
         const selfUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
         const res = await fetch(`${selfUrl}/health`);
-        Logger.info(`[HEARTBEAT] Self-ping status: ${res.status}`);
+        Logger.info(`[HEARTBEAT] API self-ping status: ${res.status}`);
       } catch (err) {
-        Logger.error('[HEARTBEAT] Self-ping failed', err);
+        Logger.error('[HEARTBEAT] API self-ping failed', err);
+      }
+
+      // 2. Ping Frontend Web app to keep it awake
+      try {
+        const webDashboardUrl = process.env.WEB_APP_URL || 'http://localhost:3000/dashboard';
+        const webBaseUrl = webDashboardUrl.replace('/dashboard', '');
+        const res = await fetch(webBaseUrl);
+        Logger.info(`[HEARTBEAT] Frontend Web self-ping status: ${res.status}`);
+      } catch (err) {
+        Logger.error('[HEARTBEAT] Frontend Web self-ping failed', err);
       }
     }, 14 * 60 * 1000);
 
