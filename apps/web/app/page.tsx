@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Search, TrendingUp, Compass, LogIn, UserPlus } from 'lucide-react';
 import { useAuthStore } from './store/authStore';
+import { API_URL } from './lib/config';
 
 interface SearchResult {
   ticker: string;
@@ -26,7 +27,7 @@ function TrendingCard({ symbol, defaultName }: { symbol: string; defaultName: st
   useEffect(() => {
     const fetchPrice = async () => {
       try {
-        const response = await fetch(`http://localhost:4000/api/v1/market/stock/${symbol}`);
+        const response = await fetch(`${API_URL}/api/v1/market/stock/${symbol}`);
         if (response.ok) {
           const json = await response.json();
           setData(json.data);
@@ -91,7 +92,7 @@ export default function LandingPage() {
     const delay = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const response = await fetch(`http://localhost:4000/api/v1/market/search?q=${encodeURIComponent(query)}`);
+        const response = await fetch(`${API_URL}/api/v1/market/search?q=${encodeURIComponent(query)}`);
         if (response.ok) {
           const json = await response.json();
           setResults(json.results);

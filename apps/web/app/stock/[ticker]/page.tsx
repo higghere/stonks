@@ -7,6 +7,7 @@ import { io, Socket } from 'socket.io-client';
 import { useAuthStore } from '../../store/authStore';
 import StockChart from '../../components/StockChart';
 import Link from 'next/link';
+import { API_URL, WS_URL } from '../../lib/config';
 
 interface OrderPayload {
   tickerId: string;
@@ -42,7 +43,7 @@ export default function StockPage() {
   const { data: stockData, isLoading: infoLoading, error: infoError } = useQuery({
     queryKey: ['stock', ticker],
     queryFn: async () => {
-      const response = await fetch(`http://localhost:4000/api/v1/market/stock/${ticker}`);
+      const response = await fetch(`${API_URL}/api/v1/market/stock/${ticker}`);
       if (!response.ok) throw new Error('Stock ticker not found');
       const json = await response.json();
       return json.data;
@@ -54,7 +55,7 @@ export default function StockPage() {
   const { data: historyData, isLoading: historyLoading } = useQuery({
     queryKey: ['history', ticker],
     queryFn: async () => {
-      const response = await fetch(`http://localhost:4000/api/v1/market/history/${ticker}?resolution=1d&from=${from}&to=${to}`);
+      const response = await fetch(`${API_URL}/api/v1/market/history/${ticker}?resolution=1d&from=${from}&to=${to}`);
       if (!response.ok) throw new Error('Failed to fetch history');
       const json = await response.json();
       return json.history;
@@ -71,7 +72,7 @@ export default function StockPage() {
 
   // 3. Connect Socket.io room for live price ticks
   useEffect(() => {
-    const socket: Socket = io('http://localhost:4000');
+    const socket: Socket = io(WS_URL);
     
     socket.emit('subscribe', `ticker:${ticker}`);
 
@@ -109,7 +110,7 @@ export default function StockPage() {
       
       const idempotencyKey = `order-${ticker}-${side}-${type}-${Date.now()}`;
 
-      const response = await fetch('http://localhost:4000/api/v1/orders', {
+      const response = await fetch(`${API_URL}/api/v1/orders`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

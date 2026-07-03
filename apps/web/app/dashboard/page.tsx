@@ -20,6 +20,7 @@ import {
 import Link from 'next/link';
 import PortfolioChart from '../components/PortfolioChart';
 import { io } from 'socket.io-client';
+import { API_URL, WS_URL } from '../lib/config';
 
 interface Position {
   id: string;
@@ -69,7 +70,7 @@ export default function DashboardPage() {
 
       if (urlToken) {
         try {
-          const res = await fetch('http://localhost:4000/api/v1/auth/me', {
+          const res = await fetch(`${API_URL}/api/v1/auth/me`, {
             headers: { Authorization: `Bearer ${urlToken}` },
           });
           const data = (await res.ok) ? await res.json() : null;
@@ -109,7 +110,7 @@ export default function DashboardPage() {
   } = useQuery({
     queryKey: ['portfolio'],
     queryFn: async () => {
-      const response = await fetch('http://localhost:4000/api/v1/portfolio', {
+      const response = await fetch(`${API_URL}/api/v1/portfolio`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) throw new Error('Failed to load portfolio');
@@ -123,7 +124,7 @@ export default function DashboardPage() {
   const { data: ordersData, isLoading: ordersLoading, refetch: refetchOrders } = useQuery({
     queryKey: ['orders'],
     queryFn: async () => {
-      const response = await fetch('http://localhost:4000/api/v1/orders', {
+      const response = await fetch(`${API_URL}/api/v1/orders`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) throw new Error('Failed to load orders');
@@ -137,7 +138,7 @@ export default function DashboardPage() {
   const { data: historyData, refetch: refetchHistory } = useQuery({
     queryKey: ['portfolio-history'],
     queryFn: async () => {
-      const response = await fetch('http://localhost:4000/api/v1/portfolio/history', {
+      const response = await fetch(`${API_URL}/api/v1/portfolio/history`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) throw new Error('Failed to load portfolio history');
@@ -151,7 +152,7 @@ export default function DashboardPage() {
   const { data: watchlistData, refetch: refetchWatchlist } = useQuery({
     queryKey: ['watchlist'],
     queryFn: async () => {
-      const response = await fetch('http://localhost:4000/api/v1/watchlist', {
+      const response = await fetch(`${API_URL}/api/v1/watchlist`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) throw new Error('Failed to load watchlist');
@@ -165,7 +166,7 @@ export default function DashboardPage() {
   const { data: alertsData, refetch: refetchAlerts } = useQuery({
     queryKey: ['alerts'],
     queryFn: async () => {
-      const response = await fetch('http://localhost:4000/api/v1/alerts', {
+      const response = await fetch(`${API_URL}/api/v1/alerts`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) throw new Error('Failed to load alerts');
@@ -181,7 +182,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!token || !user) return;
 
-    const s = io('http://localhost:4000', {
+    const s = io(WS_URL, {
       query: { userId: user.id },
     });
     setSocket(s);
@@ -242,7 +243,7 @@ export default function DashboardPage() {
     const delay = setTimeout(async () => {
       try {
         const response = await fetch(
-          `http://localhost:4000/api/v1/market/search?q=${encodeURIComponent(searchQuery)}`
+          `${API_URL}/api/v1/market/search?q=${encodeURIComponent(searchQuery)}`
         );
         if (response.ok) {
           const json = await response.json();
@@ -260,7 +261,7 @@ export default function DashboardPage() {
     if (!watchlistInput.trim()) return;
     setWatchlistError(null);
     try {
-      const res = await fetch('http://localhost:4000/api/v1/watchlist', {
+      const res = await fetch(`${API_URL}/api/v1/watchlist`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -279,7 +280,7 @@ export default function DashboardPage() {
 
   const handleRemoveWatchlist = async (symbol: string) => {
     try {
-      await fetch(`http://localhost:4000/api/v1/watchlist/${symbol}`, {
+      await fetch(`${API_URL}/api/v1/watchlist/${symbol}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -294,7 +295,7 @@ export default function DashboardPage() {
     if (!alertSymbol.trim() || !alertValue.trim()) return;
     setAlertError(null);
     try {
-      const res = await fetch('http://localhost:4000/api/v1/alerts', {
+      const res = await fetch(`${API_URL}/api/v1/alerts`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -319,7 +320,7 @@ export default function DashboardPage() {
 
   const handleDeleteAlert = async (id: string) => {
     try {
-      await fetch(`http://localhost:4000/api/v1/alerts/${id}`, {
+      await fetch(`${API_URL}/api/v1/alerts/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });

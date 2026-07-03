@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Search, TrendingUp, Compass, ArrowUpRight, ArrowDownRight, LayoutDashboard, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import { io } from 'socket.io-client';
+import { API_URL, WS_URL } from '../lib/config';
 
 interface TickerInfo {
   id: string;
@@ -134,7 +135,7 @@ export default function AllStocksPage() {
 
   // 1. WebSocket initialization
   useEffect(() => {
-    const s = io('http://localhost:4000');
+    const s = io(WS_URL);
     setSocket(s);
     return () => {
       s.disconnect();
@@ -157,8 +158,8 @@ export default function AllStocksPage() {
     queryKey: ['tickers', debouncedQuery, page],
     queryFn: async () => {
       const url = debouncedQuery.trim()
-        ? `http://localhost:4000/api/v1/market/tickers?q=${encodeURIComponent(debouncedQuery)}&page=${page}&limit=20`
-        : `http://localhost:4000/api/v1/market/tickers?page=${page}&limit=20`;
+        ? `${API_URL}/api/v1/market/tickers?q=${encodeURIComponent(debouncedQuery)}&page=${page}&limit=20`
+        : `${API_URL}/api/v1/market/tickers?page=${page}&limit=20`;
 
       const response = await fetch(url);
       if (!response.ok) throw new Error('Failed to fetch stocks');

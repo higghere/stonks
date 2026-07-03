@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '../store/authStore';
 import Link from 'next/link';
+import { API_URL } from '../lib/config';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -20,7 +21,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const response = await fetch('http://localhost:4000/api/v1/auth/login', {
+      const response = await fetch(`${API_URL}/api/v1/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
@@ -43,7 +44,7 @@ export default function LoginPage() {
 
   const handleOAuth = async (provider: 'google' | 'github') => {
     try {
-      const response = await fetch(`http://localhost:4000/api/v1/auth/oauth/${provider}`);
+      const response = await fetch(`${API_URL}/api/v1/auth/oauth/${provider}`);
       const data = await response.json();
       if (data.success && data.url) {
         window.location.href = data.url;

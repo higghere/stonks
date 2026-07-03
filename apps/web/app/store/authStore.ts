@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { API_URL } from '../lib/config';
 
 interface User {
   id: string;
@@ -40,7 +41,7 @@ export const useAuthStore = create<AuthState>((set) => {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         // Trigger API logout in background
-        fetch('http://localhost:4000/api/v1/auth/logout', { method: 'POST' }).catch(() => {});
+        fetch(`${API_URL}/api/v1/auth/logout`, { method: 'POST' }).catch(() => {});
       }
       set({ token: null, user: null });
     },
