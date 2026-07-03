@@ -1,0 +1,17 @@
+{
+  "name": "@stock-market/market-catalog",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@stock-market/database": "*",
+    "@stock-market/logger": "*",
+    "@stock-market/config": "*",
+    "@stock-market/shared": "*",
+    "@stock-market/market": "*"
+  }
+}

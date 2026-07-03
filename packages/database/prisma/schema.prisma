@@ -1,0 +1,253 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id              String           @id @default(uuid())
+  email           String           @unique
+  passwordHash    String
+  name            String
+  isEmailVerified Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  roleId          String
+  role            Role             @relation(fields: [roleId], references: [id])
+  refreshTokens   RefreshToken[]
+  preferences     UserPreference?
+  account         Account?
+  auditLogs       AuditLog[]
+  activityLogs    ActivityLog[]
+  watchlists      WatchlistItem[]
+}
+
+model Role {
+  id          String           @id
+  name        String
+  description String?
+  permissions RolePermission[]
+  users       User[]
+}
+
+model Permission {
+  id          String           @id
+  description String?
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model UserPreference {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  theme              String   @default("dark")
+  currency           String   @default("USD")
+  language           String   @default("en")
+  timezone           String   @default("UTC")
+  emailNotifications Boolean  @default(true)
+  pushNotifications  Boolean  @default(true)
+}
+
+model Account {
+  id           String              @id @default(uuid())
+  userId       String              @unique
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cashBalance  Decimal             @db.Decimal(18, 4)
+  version      Int                 @default(0)
+  baseCurrency String              @default("USD")
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  positions    Position[]
+  orders       Order[]
+  transactions Transaction[]
+  snapshots    PortfolioSnapshot[]
+}
+
+model Exchange {
+  id          String   @id
+  name        String
+  country     String
+  timezone    String
+  openingTime String // e.g. "09:30"
+  closingTime String // e.g. "16:00"
+  currency    String
+  tickers     Ticker[]
+}
+
+model Ticker {
+  id                 String     @id // e.g. "AAPL"
+  name               String
+  assetType          String // e.g. "STOCK", "ETF", etc.
+  exchangeId         String
+  exchange           Exchange   @relation(fields: [exchangeId], references: [id])
+  sector             String?
+  industry           String?
+  currency           String
+  country            String?
+  isActive           Boolean    @default(true)
+  isVerified         Boolean    @default(false)
+  lastMetadataUpdate DateTime   @default(now())
+  orders         Order[]
+  positions      Position[]
+  alerts         Alert[]
+  watchlistItems WatchlistItem[]
+}
+
+model ExchangeCrawlState {
+  exchangeId  String   @id
+  lastOffset  Int      @default(0)
+  isCompleted Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+}
+
+model Position {
+  id           String  @id @default(uuid())
+  accountId    String
+  account      Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  tickerId     String
+  ticker       Ticker  @relation(fields: [tickerId], references: [id])
+  quantity     Decimal @db.Decimal(18, 4)
+  averagePrice Decimal @db.Decimal(18, 4)
+
+  @@unique([accountId, tickerId])
+}
+
+model Order {
+  id              String      @id @default(uuid())
+  accountId       String
+  account         Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  tickerId        String
+  ticker          Ticker      @relation(fields: [tickerId], references: [id])
+  side            String // "BUY" or "SELL"
+  type            String // "MARKET", "LIMIT", "STOP", etc.
+  status          String // "PENDING", "FILLED", etc.
+  quantity        Decimal     @db.Decimal(18, 4)
+  price           Decimal?    @db.Decimal(18, 4)
+  stopPrice       Decimal?    @db.Decimal(18, 4)
+  trailPercent    Decimal?    @db.Decimal(18, 4)
+  idempotencyKey  String?     @unique
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  executions      Execution[]
+}
+
+model Execution {
+  id         String   @id @default(uuid())
+  orderId    String
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  price      Decimal  @db.Decimal(18, 4)
+  quantity   Decimal  @db.Decimal(18, 4)
+  commission Decimal  @db.Decimal(18, 4)
+  executedAt DateTime @default(now())
+}
+
+model Transaction {
+  id          String             @id @default(uuid())
+  accountId   String
+  account     Account            @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  type        String // "TRADE", "DEPOSIT", "WITHDRAWAL", "DIVIDEND", "SPLIT"
+  description String?
+  createdAt   DateTime           @default(now())
+  entries     TransactionEntry[]
+}
+
+model TransactionEntry {
+  id            String      @id @default(uuid())
+  transactionId String
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  accountId     String
+  assetType     String // "CASH" or "TICKER"
+  tickerId      String? // NULL if CASH
+  amount        Decimal     @db.Decimal(18, 4) // cash amount changes, or share quantity changes
+  price         Decimal?    @db.Decimal(18, 4) // execution price if assetType is TICKER
+  createdAt     DateTime    @default(now())
+}
+
+model PortfolioSnapshot {
+  id           String   @id @default(uuid())
+  accountId    String
+  account      Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  snapshotDate DateTime
+  totalValue   Decimal  @db.Decimal(18, 4)
+  cash         Decimal  @db.Decimal(18, 4)
+  holdingsJson Json
+  createdAt    DateTime @default(now())
+}
+
+model Alert {
+  id          String   @id @default(uuid())
+  userId      String
+  tickerId    String
+  ticker      Ticker   @relation(fields: [tickerId], references: [id])
+  type        String // "PRICE", "VOLUME"
+  condition   String // "ABOVE", "BELOW"
+  value       Decimal  @db.Decimal(18, 4)
+  isTriggered Boolean  @default(false)
+  createdAt   DateTime @default(now())
+}
+
+model FeatureFlag {
+  id          String   @id
+  enabled     Boolean  @default(false)
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  ipAddress String?
+  action    String
+  status    String // "SUCCESS" or "FAILURE"
+  details   String?
+  createdAt DateTime @default(now())
+}
+
+model ActivityLog {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message   String
+  createdAt DateTime @default(now())
+}
+
+model APIUsage {
+  id        String   @id @default(uuid())
+  ipAddress String
+  endpoint  String
+  count     Int
+  timestamp DateTime @default(now())
+}
+
+model WatchlistItem {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tickerId  String
+  ticker    Ticker   @relation(fields: [tickerId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, tickerId])
+}
