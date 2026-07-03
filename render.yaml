@@ -4,7 +4,7 @@ services:
     name: stock-market-api
     env: node
     plan: free
-    buildCommand: npm install --include=dev && npm run build:api
+    buildCommand: npm install --include=dev && npx prisma db push --schema=packages/database/prisma/schema.prisma && npm run db:seed && npm run build:api
     startCommand: npm run start -w apps/api
     envVars:
       - key: NODE_ENV
