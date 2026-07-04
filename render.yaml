@@ -12,13 +12,13 @@ services:
       - key: PORT
         value: 10000
       - key: RENDER_EXTERNAL_URL
-        value: https://stock-market-api.onrender.com
+        value: https://stock-market-api-4iub.onrender.com
       - key: WEB_APP_URL
         value: https://stock-market-web.onrender.com/dashboard
       - key: GOOGLE_REDIRECT_URI
-        value: https://stock-market-api.onrender.com/api/v1/auth/oauth/google/callback
+        value: https://stock-market-api-4iub.onrender.com/api/v1/auth/oauth/google/callback
       - key: GITHUB_REDIRECT_URI
-        value: https://stock-market-api.onrender.com/api/v1/auth/oauth/github/callback
+        value: https://stock-market-api-4iub.onrender.com/api/v1/auth/oauth/github/callback
       - key: DATABASE_URL
         fromDatabase:
           name: stock-market-db
@@ -42,7 +42,7 @@ services:
       - key: PORT
         value: 3000
       - key: NEXT_PUBLIC_API_URL
-        value: https://stock-market-api.onrender.com
+        value: https://stock-market-api-4iub.onrender.com
 
   # 3. Managed Redis Cache (Defined under services block in Render Spec)
   - type: redis
