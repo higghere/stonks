@@ -23,6 +23,7 @@ model User {
   auditLogs       AuditLog[]
   activityLogs    ActivityLog[]
   watchlists      WatchlistItem[]
+  simulations     Simulation[]
 }
 
 model Role {
@@ -67,21 +68,26 @@ model UserPreference {
   timezone           String   @default("UTC")
   emailNotifications Boolean  @default(true)
   pushNotifications  Boolean  @default(true)
+  costBasisMethod    String   @default("FIFO")
 }
 
 model Account {
-  id           String              @id @default(uuid())
-  userId       String              @unique
-  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  cashBalance  Decimal             @db.Decimal(18, 4)
-  version      Int                 @default(0)
-  baseCurrency String              @default("USD")
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
-  positions    Position[]
-  orders       Order[]
-  transactions Transaction[]
-  snapshots    PortfolioSnapshot[]
+  id                 String              @id @default(uuid())
+  userId             String              @unique
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cashBalance        Decimal             @db.Decimal(18, 4)
+  version            Int                 @default(0)
+  baseCurrency       String              @default("USD")
+  marginCallActive   Boolean             @default(false)
+  marginCallAt       DateTime?
+  marginCallDeadline DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  positions          Position[]
+  orders             Order[]
+  transactions       Transaction[]
+  snapshots          PortfolioSnapshot[]
+  marginCallLogs     MarginCallLog[]
 }
 
 model Exchange {
@@ -97,22 +103,31 @@ model Exchange {
 
 model Ticker {
   id                 String     @id // e.g. "AAPL"
-  name               String
-  assetType          String // e.g. "STOCK", "ETF", etc.
+  symbol             String     @default("")
+  name               String     // Keep for backwards compatibility
+  assetType          String     // Keep for backwards compatibility
   exchangeId         String
   exchange           Exchange   @relation(fields: [exchangeId], references: [id])
-  sector             String?
-  industry           String?
+  assetId            String?
+  asset              Asset?     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  sector             String?    // Keep for backwards compatibility
+  industry           String?    // Keep for backwards compatibility
   currency           String
-  country            String?
+  country            String?    // Keep for backwards compatibility
   isActive           Boolean    @default(true)
   isVerified         Boolean    @default(false)
   lastMetadataUpdate DateTime   @default(now())
+  providerId         String?
+  providerSymbol     String?
+  volatility         Float      @default(0.02)
+
   orders         Order[]
   positions      Position[]
   alerts         Alert[]
   watchlistItems WatchlistItem[]
+  ohlcCandles    OHLCCandle[]
 }
+
 
 model ExchangeCrawlState {
   exchangeId  String   @id
@@ -122,13 +137,16 @@ model ExchangeCrawlState {
 }
 
 model Position {
-  id           String  @id @default(uuid())
-  accountId    String
-  account      Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  tickerId     String
-  ticker       Ticker  @relation(fields: [tickerId], references: [id])
-  quantity     Decimal @db.Decimal(18, 4)
-  averagePrice Decimal @db.Decimal(18, 4)
+  id              String   @id @default(uuid())
+  accountId       String
+  account         Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  tickerId        String
+  ticker          Ticker   @relation(fields: [tickerId], references: [id])
+  quantity        Decimal  @db.Decimal(18, 4)
+  averagePrice    Decimal  @db.Decimal(18, 4)
+  isShort         Boolean  @default(false)
+  marginCallPrice Decimal? @db.Decimal(18, 4)
+  lots            PositionLot[]
 
   @@unique([accountId, tickerId])
 }
@@ -147,6 +165,7 @@ model Order {
   stopPrice       Decimal?    @db.Decimal(18, 4)
   trailPercent    Decimal?    @db.Decimal(18, 4)
   idempotencyKey  String?     @unique
+  source          String      @default("USER")
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
   executions      Execution[]
@@ -251,3 +270,237 @@ model WatchlistItem {
 
   @@unique([userId, tickerId])
 }
+
+// ==========================================
+// ALTERNATE REALITY SIMULATION MODELS
+// ==========================================
+
+model Simulation {
+  id              String           @id @default(uuid())
+  name            String           // Save file name
+  tickNumber      Int              @default(0) // Integer ticks map to calendar internally
+  difficulty      String           @default("NORMAL")
+  playerActorId   String?          // Entity ID controlled by user (e.g. NOK Company, Gov, or Bank)
+  seed            String
+  status          String           @default("ACTIVE")
+  divergenceScore Decimal          @db.Decimal(5, 2) @default(0.0)
+  worldState      Json             // Serialized<SimulationWorld>
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  portfolios      SimulationPortfolio[]
+  events          SimulationEvent[]
+  news            SimulationNews[]
+}
+
+model SimulationPortfolio {
+  id           String              @id @default(uuid())
+  simulationId String
+  userId       String
+  cashBalance  Decimal             @db.Decimal(18, 4)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  simulation   Simulation          @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+  positions    SimulationPosition[]
+  orders       SimulationOrder[]
+}
+
+model SimulationPosition {
+  id           String              @id @default(uuid())
+  portfolioId  String
+  tickerId     String
+  quantity     Decimal             @db.Decimal(18, 4)
+  averagePrice Decimal             @db.Decimal(18, 4)
+
+  portfolio    SimulationPortfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+}
+
+model SimulationOrder {
+  id           String              @id @default(uuid())
+  portfolioId  String
+  tickerId     String
+  side         String              
+  type         String              
+  status       String              
+  quantity     Decimal             @db.Decimal(18, 4)
+  price        Decimal?            @db.Decimal(18, 4)
+  stopPrice    Decimal?            @db.Decimal(18, 4)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  portfolio    SimulationPortfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+}
+
+model SimulationEvent {
+  id           String     @id @default(uuid())
+  simulationId String
+  tickNumber   Int        // The tick when the event occurred/is scheduled
+  type         String     // "PLAYER_ACTION", "FACTORY_FIRE", "PATENT_LAWSUIT", "DIVERGENCE"
+  data         Json       
+  processed    Boolean    @default(false)
+  timestamp    DateTime   @default(now())
+
+  simulation   Simulation @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+}
+
+model SimulationNews {
+  id                String     @id @default(uuid())
+  simulationId      String
+  headline          String
+  summary           String
+  affectedCompanies Json       // Array of ticker IDs
+  impactScore       Decimal    @db.Decimal(18, 4)
+  generated         Boolean    @default(true)
+  real              Boolean    @default(false)
+  createdAt         DateTime   @default(now())
+
+  simulation        Simulation @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+}
+
+enum AssetType {
+  EQUITY
+  ETF
+  CRYPTO
+  FOREX
+  INDEX
+  COMMODITY
+  BOND
+  MUTUAL_FUND
+  OPTION
+  FUTURE
+}
+
+enum DiscoveryStatus {
+  DISCOVERED
+  VERIFIED
+  DELISTED
+  UNKNOWN
+}
+
+enum QueueStatus {
+  PENDING
+  PROCESSING
+  FAILED
+  COMPLETED
+}
+
+enum ProviderSource {
+  YAHOO
+  ALPHA_VANTAGE
+  FINNHUB
+  MANUAL
+  MOCK
+}
+
+enum DiscoveryReason {
+  SEARCH
+  PASSIVE
+  NEWS
+  WATCHLIST
+  ETF
+  CRAWLER
+  API_IMPORT
+}
+
+model Asset {
+  id                 String                @id @default(uuid())
+  name               String
+  assetType          AssetType             @default(EQUITY)
+  sector             String?
+  industry           String?
+  country            String?
+  status             DiscoveryStatus       @default(DISCOVERED)
+  provider           ProviderSource        @default(MOCK)
+  lastVerifiedAt     DateTime?
+  lastMetadataUpdate DateTime              @default(now())
+
+  listings           Ticker[]
+  metadataHistory    AssetMetadataHistory[]
+}
+
+model AssetMetadataHistory {
+  id            String    @id @default(uuid())
+  assetId       String
+  asset         Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  name          String
+  sector        String?
+  industry      String?
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime?
+}
+
+model DiscoveryQueue {
+  id          String          @id @default(uuid())
+  symbol      String          @unique
+  name        String?
+  exchangeId  String?
+  provider    ProviderSource  @default(YAHOO)
+  reason      DiscoveryReason @default(SEARCH)
+  priority    Int             @default(50)
+  status      QueueStatus     @default(PENDING)
+  retries     Int             @default(0)
+  nextAttempt DateTime        @default(now())
+  createdAt   DateTime        @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+  updatedAt   DateTime        @updatedAt
+}
+
+model EnrichmentQueue {
+  id          String          @id @default(uuid())
+  symbol      String          @unique
+  status      QueueStatus     @default(PENDING)
+  priority    Int             @default(50)
+  retries     Int             @default(0)
+  nextAttempt DateTime        @default(now())
+  createdAt   DateTime        @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+  updatedAt   DateTime        @updatedAt
+}
+
+model MarginCallLog {
+  id             String           @id @default(uuid())
+  accountId      String
+  account        Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  equityAtCall   Decimal          @db.Decimal(18, 4)
+  requiredEquity Decimal          @db.Decimal(18, 4)
+  triggeredAt    DateTime         @default(now())
+  resolvedAt     DateTime?
+  resolution     MarginResolution?
+}
+
+enum MarginResolution {
+  DEPOSITED
+  LIQUIDATED
+  POSITION_CLOSED
+}
+
+model OHLCCandle {
+  id        String   @id @default(uuid())
+  tickerId  String
+  ticker    Ticker   @relation(fields: [tickerId], references: [id], onDelete: Cascade)
+  open      Decimal  @db.Decimal(18, 4)
+  high      Decimal  @db.Decimal(18, 4)
+  low       Decimal  @db.Decimal(18, 4)
+  close     Decimal  @db.Decimal(18, 4)
+  volume    Decimal  @db.Decimal(18, 4)
+  timeframe String   // e.g. "5m", "1h", "1d"
+  timestamp DateTime
+
+  @@unique([tickerId, timeframe, timestamp])
+}
+
+model PositionLot {
+  id                String   @id @default(uuid())
+  positionId        String
+  position          Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  quantity          Decimal  @db.Decimal(18, 4)
+  remainingQuantity Decimal  @db.Decimal(18, 4)
+  price             Decimal  @db.Decimal(18, 4)
+  acquiredAt        DateTime @default(now())
+}
+

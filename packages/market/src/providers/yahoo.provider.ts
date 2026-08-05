@@ -11,9 +11,7 @@ export class YahooFinanceProvider extends MarketProvider {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'application/json',
     };
-  }
-
-  public async getQuote(ticker: string): Promise<MarketQuote> {
+  }  public async getQuote(ticker: string): Promise<MarketQuote> {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker.toUpperCase()}?interval=1d&range=1d`;
     
     const response = await fetch(url, { headers: this.getHeaders() });
@@ -29,30 +27,91 @@ export class YahooFinanceProvider extends MarketProvider {
 
     const meta = result.meta;
     const price = meta.regularMarketPrice;
-    const previousClose = meta.chartPreviousClose || meta.previousClose || price;
+    const currency = meta.currency || 'USD';
     
-    const change = parseFloat((price - previousClose).toFixed(2));
-    const changePercent = parseFloat(((change / previousClose) * 100).toFixed(2));
+    const isSubUnit = currency === 'GBp' || currency === 'GBX' || currency === 'ZAc' || currency === 'ILc';
+    const scale = isSubUnit ? 100 : 1;
+
+    const priceAdjusted = price / scale;
+    const previousClose = (meta.chartPreviousClose || meta.previousClose || price) / scale;
+    
+    const change = parseFloat((priceAdjusted - previousClose).toFixed(4));
+    const changePercent = parseFloat(((change / previousClose) * 100).toFixed(4));
 
     // Get today's high/low if indicator quote has them
     const indicators = result.indicators?.quote?.[0] || {};
-    const high = indicators.high?.[0] ? parseFloat(indicators.high[0].toFixed(2)) : price;
-    const low = indicators.low?.[0] ? parseFloat(indicators.low[0].toFixed(2)) : price;
-    const open = indicators.open?.[0] ? parseFloat(indicators.open[0].toFixed(2)) : price;
+    const high = (indicators.high?.[0] ? indicators.high[0] : price) / scale;
+    const low = (indicators.low?.[0] ? indicators.low[0] : price) / scale;
+    const open = (indicators.open?.[0] ? indicators.open[0] : price) / scale;
     const volume = indicators.volume?.[0] || 1000000;
 
     return {
       ticker: ticker.toUpperCase(),
-      price: parseFloat(price.toFixed(2)),
+      price: parseFloat(priceAdjusted.toFixed(4)),
       change,
       changePercent,
       volume,
-      high,
-      low,
-      open,
-      previousClose: parseFloat(previousClose.toFixed(2)),
+      high: parseFloat(high.toFixed(4)),
+      low: parseFloat(low.toFixed(4)),
+      open: parseFloat(open.toFixed(4)),
+      previousClose: parseFloat(previousClose.toFixed(4)),
       timestamp: meta.regularMarketTime * 1000 || Date.now(),
     };
+  }
+  public async getQuotes(tickers: string[]): Promise<Record<string, MarketQuote>> {
+    if (tickers.length === 0) return {};
+
+    const cleanSymbols = tickers.map(s => s.toUpperCase().trim());
+    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${cleanSymbols.join(',')}`;
+
+    const response = await fetch(url, { headers: this.getHeaders() });
+    if (!response.ok) {
+      throw new Error(`Yahoo Finance batch quote request failed for ${cleanSymbols.join(',')}`);
+    }
+
+    const data = await response.json();
+    const quoteResponse = data?.quoteResponse?.result || [];
+
+    const results: Record<string, MarketQuote> = {};
+    for (const item of quoteResponse) {
+      const sym = item.symbol.toUpperCase();
+      const currency = item.currency || 'USD';
+      
+      const isSubUnit = currency === 'GBp' || currency === 'GBX' || currency === 'ZAc' || currency === 'ILc';
+      const scale = isSubUnit ? 100 : 1;
+
+      const priceRaw = item.regularMarketPrice || item.preMarketPrice || item.postMarketPrice || 0;
+      const price = priceRaw / scale;
+      const previousClose = (item.regularMarketPreviousClose || priceRaw) / scale;
+      const change = parseFloat((price - previousClose).toFixed(4));
+      const changePercent = parseFloat(((change / previousClose) * 100).toFixed(4));
+
+      results[sym] = {
+        ticker: sym,
+        price: parseFloat(price.toFixed(4)),
+        change,
+        changePercent,
+        volume: item.regularMarketVolume || 0,
+        high: (item.regularMarketDayHigh || priceRaw) / scale,
+        low: (item.regularMarketDayLow || priceRaw) / scale,
+        open: (item.regularMarketOpen || priceRaw) / scale,
+        previousClose: parseFloat(previousClose.toFixed(4)),
+        timestamp: item.regularMarketTime * 1000 || Date.now(),
+      };
+    }
+
+    // For any tickers that Yahoo didn't return, fallback to individual query
+    for (const sym of cleanSymbols) {
+      if (!results[sym]) {
+        try {
+          results[sym] = await this.getQuote(sym);
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    return results;
   }
 
   public async getCompanyProfile(ticker: string): Promise<CompanyProfile> {

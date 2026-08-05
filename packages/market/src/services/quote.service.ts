@@ -68,10 +68,10 @@ export class QuoteService {
   /**
    * Starts a background polling loop that streams price updates for active symbols
    */
-  public startPolling(onQuoteUpdate: (quote: MarketQuote) => void): void {
+  public startPolling(onQuoteUpdate?: (quote: MarketQuote) => void): void {
     if (this.pollingInterval) return;
 
-    Logger.info('[QUOTE SERVICE] Starting intelligent quote polling loop...');
+    Logger.info('[QUOTE SERVICE] Starting intelligent quote polling loop with Redis Pub/Sub publishing...');
 
     this.pollingInterval = setInterval(async () => {
       const activeSymbols = this.interestService.getActiveSymbols();
@@ -79,19 +79,29 @@ export class QuoteService {
 
       Logger.info(`[QUOTE SERVICE] Polling live prices for ${activeSymbols.length} active symbols: ${activeSymbols.join(', ')}`);
 
+      // Batch retrieve quotes for active symbols to optimize performance
+      let quotesMap: Record<string, MarketQuote> = {};
+      try {
+        quotesMap = await this.marketService.getQuotes(activeSymbols);
+      } catch (err) {
+        Logger.error('[QUOTE SERVICE] Failed to batch fetch quotes', err);
+      }
+
       for (const sym of activeSymbols) {
         try {
-          // Fetch quote (bypassing Redis cache check to refresh it with new data)
-          const quote = await this.marketService.getQuote(sym);
+          const quote = quotesMap[sym] || await this.marketService.getQuote(sym);
 
           // Update cache
           const cacheKey = `livequote:${sym}`;
           if (this.redis.isOpen) {
             await this.redis.setEx(cacheKey, 10, JSON.stringify(quote));
+            await this.redis.publish('market:ticks', JSON.stringify(quote));
           }
 
-          // Emit update callback
-          onQuoteUpdate(quote);
+          // Emit update callback if provided
+          if (onQuoteUpdate) {
+            onQuoteUpdate(quote);
+          }
         } catch (err) {
           Logger.error(`[QUOTE SERVICE] Failed to poll live price for ${sym}`, err);
         }

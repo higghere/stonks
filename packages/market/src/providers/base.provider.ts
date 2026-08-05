@@ -13,4 +13,17 @@ export abstract class MarketProvider {
   abstract searchTickers(
     query: string
   ): Promise<Array<{ ticker: string; name: string; exchange: string; assetType: string }>>;
+
+  public async getQuotes(tickers: string[]): Promise<Record<string, MarketQuote>> {
+    const results: Record<string, MarketQuote> = {};
+    const promises = tickers.map(async (ticker) => {
+      try {
+        results[ticker.toUpperCase()] = await this.getQuote(ticker);
+      } catch (err) {
+        // ignore
+      }
+    });
+    await Promise.all(promises);
+    return results;
+  }
 }

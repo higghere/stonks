@@ -1,11 +1,11 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { MarketService } from '@stock-market/market';
+import { MarketService, SearchService } from '@stock-market/market';
 import { ExchangeService } from '@stock-market/market';
 import { prisma } from '@stock-market/database';
 import { AppErrorCode } from '@stock-market/shared';
 import { AppError } from '../middlewares/error.middleware';
-import { MarketCatalogService } from '@stock-market/market-catalog';
 import { searchLimiter, quoteLimiter } from '../middlewares/rate-limit.middleware';
+
 
 const router = Router();
 const marketService = MarketService.getInstance();
@@ -19,7 +19,7 @@ router.get('/search', searchLimiter, async (req: Request, res: Response, next: N
       throw new AppError(AppErrorCode.BAD_REQUEST, 'Search query parameter "q" is required', 400);
     }
 
-    const results = await marketService.searchTickers(query);
+    const results = await SearchService.getInstance().search(query);
     res.json({
       success: true,
       results,
@@ -90,44 +90,16 @@ router.get('/tickers', async (req: Request, res: Response, next: NextFunction) =
     let tickersList;
 
     if (query && query.trim().length > 0) {
-      const qClean = query.trim();
-      // 1. Search locally in PostgreSQL Ticker first
-      const localTickers = await prisma.ticker.findMany({
-        where: {
-          isActive: true,
-          OR: [
-            { id: { contains: qClean, mode: 'insensitive' } },
-            { name: { contains: qClean, mode: 'insensitive' } },
-          ],
-        },
-        include: { exchange: true },
-        skip,
-        take: limit,
-      });
-
-      if (localTickers.length > 0) {
-        tickersList = localTickers;
-      } else {
-        // 2. Query provider (YahooFinance autocomplete)
-        const searchResults = await marketService.searchTickers(qClean);
-        const upsertedTickers = [];
-        for (const res of searchResults) {
-          try {
-            const t = await MarketCatalogService.getInstance().registerDynamicDiscovery(res.ticker);
-            upsertedTickers.push(t);
-          } catch (err) {
-            console.error(`Failed to register discovery ticker ${res.ticker}:`, err);
-          }
-        }
-        // Slice the results according to pagination
-        tickersList = upsertedTickers.slice(skip, skip + limit);
-      }
+      tickersList = await SearchService.getInstance().search(query, skip, limit);
     } else {
       // Return standard database listings ordered by verified popularity
       tickersList = await prisma.ticker.findMany({
         where: { isActive: true },
         include: { exchange: true },
-        orderBy: { id: 'asc' },
+        orderBy: [
+          { isVerified: 'desc' },
+          { id: 'asc' }
+        ],
         skip,
         take: limit,
       });

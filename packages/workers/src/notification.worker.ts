@@ -41,6 +41,10 @@ export class NotificationWorker {
       Logger.error(`Notification worker failed job ${job?.id}`, err);
     });
 
+    this.worker.on('error', (err) => {
+      Logger.error('BullMQ Notification Worker Redis connection error', err);
+    });
+
     Logger.info('Notification BullMQ Worker started successfully');
   }
 

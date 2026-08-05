@@ -186,7 +186,7 @@ export default function LandingPage() {
 
       {/* Footer */}
       <footer className="border-t border-slate-900 py-6 text-center text-xs text-slate-600 mt-auto">
-        &copy; {new Date().getFullYear()} Antigravity Trading Systems. For simulation and training purposes only.
+        &copy; {new Date().getFullYear()} Stock Market Simulation Systems. For simulation and training purposes only.
       </footer>
     </div>
   );

@@ -20,8 +20,17 @@ export function errorMiddleware(
   res: Response,
   next: NextFunction
 ): void {
-  const statusCode = err instanceof AppError ? err.statusCode : 500;
-  const code = err instanceof AppError ? err.code : AppErrorCode.INTERNAL_SERVER_ERROR;
+  let statusCode = 500;
+  let code = AppErrorCode.INTERNAL_SERVER_ERROR;
+
+  if (err instanceof AppError) {
+    statusCode = err.statusCode;
+    code = err.code;
+  } else if (err && typeof err === 'object' && 'code' in err) {
+    statusCode = err.statusCode || 400;
+    code = err.code;
+  }
+
   const message = err.message || 'An unexpected error occurred';
   const details = err.details || null;
 

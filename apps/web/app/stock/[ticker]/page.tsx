@@ -23,8 +23,7 @@ export default function StockPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const ticker = (params.ticker as string).toUpperCase();
-  const token = useAuthStore((state) => state.token);
-  const user = useAuthStore((state) => state.user);
+  const { token, user, activeSimulationId, logout } = useAuthStore();
 
   // Form states
   const [side, setSide] = useState<'BUY' | 'SELL'>('BUY');
@@ -41,9 +40,16 @@ export default function StockPage() {
 
   // 1. Fetch Ticker info (quote, profile, session)
   const { data: stockData, isLoading: infoLoading, error: infoError } = useQuery({
-    queryKey: ['stock', ticker],
+    queryKey: ['stock', ticker, activeSimulationId, token],
     queryFn: async () => {
-      const response = await fetch(`${API_URL}/api/v1/market/stock/${ticker}`);
+      const path = activeSimulationId
+        ? `/api/v1/simulation/${activeSimulationId}/stock/${ticker}`
+        : `/api/v1/market/stock/${ticker}`;
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const response = await fetch(`${API_URL}${path}`, { headers });
       if (!response.ok) throw new Error('Stock ticker not found');
       const json = await response.json();
       return json.data;
@@ -53,8 +59,9 @@ export default function StockPage() {
 
   // 2. Fetch Ticker History
   const { data: historyData, isLoading: historyLoading } = useQuery({
-    queryKey: ['history', ticker],
+    queryKey: ['history', ticker, activeSimulationId],
     queryFn: async () => {
+      if (activeSimulationId) return [];
       const response = await fetch(`${API_URL}/api/v1/market/history/${ticker}?resolution=1d&from=${from}&to=${to}`);
       if (!response.ok) throw new Error('Failed to fetch history');
       const json = await response.json();
@@ -74,12 +81,13 @@ export default function StockPage() {
   useEffect(() => {
     const socket: Socket = io(WS_URL);
     
-    socket.emit('subscribe', `ticker:${ticker}`);
+    socket.emit('subscribe', `interest:${ticker}`);
 
-    socket.on('quote', (data: any) => {
+    socket.on('price-update', (data: any) => {
+      if (activeSimulationId && stockData?.isSimulated) return;
       if (data.ticker === ticker) {
         // Optimistically update quote details in query cache
-        queryClient.setQueryData(['stock', ticker], (oldData: any) => {
+        queryClient.setQueryData(['stock', ticker, activeSimulationId, token], (oldData: any) => {
           if (!oldData) return oldData;
           return {
             ...oldData,
@@ -98,10 +106,10 @@ export default function StockPage() {
     });
 
     return () => {
-      socket.emit('unsubscribe', `ticker:${ticker}`);
+      socket.emit('unsubscribe', `interest:${ticker}`);
       socket.disconnect();
     };
-  }, [ticker, queryClient]);
+  }, [ticker, queryClient, activeSimulationId, stockData, token]);
 
   // 4. Place Order Mutation
   const orderMutation = useMutation({
@@ -110,7 +118,11 @@ export default function StockPage() {
       
       const idempotencyKey = `order-${ticker}-${side}-${type}-${Date.now()}`;
 
-      const response = await fetch(`${API_URL}/api/v1/orders`, {
+      const path = activeSimulationId
+        ? `/api/v1/simulation/${activeSimulationId}/orders`
+        : `/api/v1/orders`;
+
+      const response = await fetch(`${API_URL}${path}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -119,6 +131,12 @@ export default function StockPage() {
         },
         body: JSON.stringify(payload),
       });
+
+      if (response.status === 401) {
+        logout();
+        router.push('/login');
+        throw new Error('Session expired. Please sign in again.');
+      }
 
       const json = await response.json();
       if (!response.ok) {
@@ -227,14 +245,14 @@ export default function StockPage() {
           {/* Core Key Statistics */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {[
-              { label: 'Market Cap', value: `$${(profile.marketCap / 1e9).toFixed(1)}B` },
-              { label: 'P/E Ratio', value: profile.peRatio.toFixed(1) },
-              { label: 'EPS', value: `$${profile.eps.toFixed(2)}` },
-              { label: 'Dividend Yield', value: `${profile.dividendYield.toFixed(2)}%` },
-              { label: 'Beta', value: profile.beta.toFixed(2) },
-              { label: '52 Wk High', value: `$${profile.high52Week.toFixed(2)}` },
-              { label: '52 Wk Low', value: `$${profile.low52Week.toFixed(2)}` },
-              { label: 'Currency', value: profile.currency },
+              { label: 'Market Cap', value: profile.marketCap ? `$${(profile.marketCap / 1e9).toFixed(1)}B` : '-' },
+              { label: 'P/E Ratio', value: profile.peRatio ? profile.peRatio.toFixed(1) : '-' },
+              { label: 'EPS', value: profile.eps ? `$${profile.eps.toFixed(2)}` : '-' },
+              { label: 'Dividend Yield', value: profile.dividendYield ? `${profile.dividendYield.toFixed(2)}%` : '-' },
+              { label: 'Beta', value: profile.beta ? profile.beta.toFixed(2) : '-' },
+              { label: '52 Wk High', value: profile.high52Week ? `$${profile.high52Week.toFixed(2)}` : '-' },
+              { label: '52 Wk Low', value: profile.low52Week ? `$${profile.low52Week.toFixed(2)}` : '-' },
+              { label: 'Currency', value: profile.currency || '-' },
             ].map((stat, i) => (
               <div key={i} className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
                 <div className="text-xs text-slate-500 font-medium">{stat.label}</div>

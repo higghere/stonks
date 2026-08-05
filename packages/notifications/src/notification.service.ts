@@ -31,12 +31,14 @@ export class NotificationService {
       };
 
       this.queue = new Queue('notification-queue', { connection });
+      this.queue.on('error', (err) => Logger.error('BullMQ Notification Queue connection error', err));
       Logger.info('Notification BullMQ queue initialized successfully');
     } catch (err) {
       Logger.error('Failed to parse REDIS_URL for BullMQ connection, falling back to defaults', err);
       this.queue = new Queue('notification-queue', {
         connection: { host: '127.0.0.1', port: 6379 },
       });
+      this.queue.on('error', (err) => Logger.error('BullMQ Notification Queue connection error', err));
     }
   }
 

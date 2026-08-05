@@ -4,8 +4,11 @@ import QueryProvider from './components/QueryProvider';
 import Navbar from './components/Navbar';
 
 export const metadata = {
-  title: 'Stock Market Paper Trading',
+  title: 'Stock Market Simulation',
   description: 'Simulated real-time paper trading platform',
+  icons: {
+    icon: '/icon.jpg',
+  },
 };
 
 export default function RootLayout({

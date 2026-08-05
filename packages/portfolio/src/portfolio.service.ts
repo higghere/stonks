@@ -11,6 +11,8 @@ export interface PositionValuation {
   marketValue: number;
   unrealizedPl: number;
   unrealizedPlPercent: number;
+  isShort?: boolean;
+  marginCallPrice?: number;
 }
 
 export interface PortfolioValuation {
@@ -19,6 +21,8 @@ export interface PortfolioValuation {
     cashBalance: number;
     totalHoldingsValue: number;
     netAssetValue: number;
+    marginCallActive?: boolean;
+    marginCallDeadline?: Date;
   };
   positions: PositionValuation[];
 }
@@ -34,6 +38,52 @@ export class PortfolioService {
       PortfolioService.instance = new PortfolioService();
     }
     return PortfolioService.instance;
+  }
+
+  public async getExchangeRate(fromCurrency: string, toCurrency: string): Promise<number> {
+    const from = fromCurrency.toUpperCase().trim();
+    const to = toCurrency.toUpperCase().trim();
+
+    if (from === to) return 1.0;
+
+    const ticker1 = `${from}${to}=X`;
+    try {
+      const quote = await this.marketService.getQuote(ticker1);
+      if (quote && quote.price > 0) {
+        return quote.price;
+      }
+    } catch {
+      const ticker2 = `${to}${from}=X`;
+      try {
+        const quote = await this.marketService.getQuote(ticker2);
+        if (quote && quote.price > 0) {
+          return 1.0 / quote.price;
+        }
+      } catch {
+        // Fall back
+      }
+    }
+
+    const usdRates: Record<string, number> = {
+      USD: 1.0,
+      EUR: 1.08,
+      GBP: 1.28,
+      JPY: 0.0065,
+      CAD: 0.73,
+      AUD: 0.66,
+      CHF: 1.12,
+      CNY: 0.14,
+      INR: 0.012,
+    };
+
+    const fromRate = usdRates[from];
+    const toRate = usdRates[to];
+
+    if (fromRate && toRate) {
+      return fromRate / toRate;
+    }
+
+    return 1.0;
   }
 
   /**
@@ -60,37 +110,68 @@ export class PortfolioService {
     const positionValuations: PositionValuation[] = [];
     let totalHoldingsValue = 0;
 
-    // 2. Fetch live quotes and calculate valuations
+    // Batch query quotes for all positions to optimize performance
+    const tickerIds = account.positions.map(p => p.tickerId);
+    let quotesMap: Record<string, any> = {};
+    try {
+      quotesMap = await this.marketService.getQuotes(tickerIds);
+    } catch (err) {
+      Logger.error('Failed to batch query quotes in getPortfolioValuation', err);
+    }
+
+    // 2. Calculate valuations with FX conversions and short selling metrics
     for (const pos of account.positions) {
       const qty = Number(pos.quantity);
       if (qty <= 0) continue;
 
+      const baseCurrency = account.baseCurrency || 'USD';
+      const tickerCurrency = 'USD';
+
       try {
-        const quote = await this.marketService.getQuote(pos.tickerId);
+        const quote = quotesMap[pos.tickerId] || await this.marketService.getQuote(pos.tickerId);
         const currentPrice = quote.price;
         const avgPrice = Number(pos.averagePrice);
 
-        const marketValue = qty * currentPrice;
-        const unrealizedPl = (currentPrice - avgPrice) * qty;
-        const unrealizedPlPercent = avgPrice > 0 ? (unrealizedPl / (avgPrice * qty)) * 100 : 0;
+        // Get FX rate to convert this position's native metrics to account base currency
+        const fxRate = await this.getExchangeRate(tickerCurrency, baseCurrency);
 
-        totalHoldingsValue += marketValue;
+        // Market value and Unrealized Pl in native currency
+        const marketValueNative = pos.isShort ? -qty * currentPrice : qty * currentPrice;
+        const unrealizedPlNative = pos.isShort 
+          ? (avgPrice - currentPrice) * qty 
+          : (currentPrice - avgPrice) * qty;
+
+        // Convert to base currency
+        const marketValueBase = marketValueNative * fxRate;
+        const unrealizedPlBase = unrealizedPlNative * fxRate;
+
+        const unrealizedPlPercent = avgPrice > 0 
+          ? (unrealizedPlNative / (avgPrice * qty)) * 100 
+          : 0;
+
+        totalHoldingsValue += marketValueBase;
+
         positionValuations.push({
           tickerId: pos.tickerId,
           name: pos.ticker.name,
           quantity: qty,
           averagePrice: avgPrice,
           currentPrice,
-          marketValue,
-          unrealizedPl,
-          unrealizedPlPercent,
+          marketValue: parseFloat(marketValueBase.toFixed(2)),
+          unrealizedPl: parseFloat(unrealizedPlBase.toFixed(2)),
+          unrealizedPlPercent: parseFloat(unrealizedPlPercent.toFixed(2)),
+          isShort: pos.isShort,
+          marginCallPrice: pos.marginCallPrice ? Number(pos.marginCallPrice) : undefined,
         });
       } catch (err) {
         Logger.error(`Failed to value holding ${pos.tickerId} for account ${account.id}`, err);
-        // Fallback to average entry price as default price in case of feed downtime
         const avgPrice = Number(pos.averagePrice);
-        const marketValue = qty * avgPrice;
-        totalHoldingsValue += marketValue;
+        const fxRate = await this.getExchangeRate(tickerCurrency, baseCurrency);
+
+        const marketValueNative = pos.isShort ? -qty * avgPrice : qty * avgPrice;
+        const marketValueBase = marketValueNative * fxRate;
+
+        totalHoldingsValue += marketValueBase;
 
         positionValuations.push({
           tickerId: pos.tickerId,
@@ -98,9 +179,11 @@ export class PortfolioService {
           quantity: qty,
           averagePrice: avgPrice,
           currentPrice: avgPrice,
-          marketValue,
+          marketValue: parseFloat(marketValueBase.toFixed(2)),
           unrealizedPl: 0,
           unrealizedPlPercent: 0,
+          isShort: pos.isShort,
+          marginCallPrice: pos.marginCallPrice ? Number(pos.marginCallPrice) : undefined,
         });
       }
     }
@@ -109,8 +192,10 @@ export class PortfolioService {
       account: {
         id: account.id,
         cashBalance: cash,
-        totalHoldingsValue,
-        netAssetValue: cash + totalHoldingsValue,
+        totalHoldingsValue: parseFloat(totalHoldingsValue.toFixed(2)),
+        netAssetValue: parseFloat((cash + totalHoldingsValue).toFixed(2)),
+        marginCallActive: account.marginCallActive,
+        marginCallDeadline: account.marginCallDeadline || undefined,
       },
       positions: positionValuations,
     };

@@ -6,6 +6,7 @@ import { Search, TrendingUp, Compass, ArrowUpRight, ArrowDownRight, LayoutDashbo
 import Link from 'next/link';
 import { io } from 'socket.io-client';
 import { API_URL, WS_URL } from '../lib/config';
+import { useAuthStore } from '../store/authStore';
 
 interface TickerInfo {
   id: string;
@@ -18,6 +19,7 @@ interface TickerInfo {
   price: number;
   change: number;
   changePercent: number;
+  isSimulated?: boolean;
 }
 
 interface StockRowProps {
@@ -26,6 +28,7 @@ interface StockRowProps {
 }
 
 function StockRow({ ticker, socket }: StockRowProps) {
+  const { activeSimulationId } = useAuthStore();
   const rowRef = useRef<HTMLTableRowElement>(null);
   const [price, setPrice] = useState(ticker.price);
   const [change, setChange] = useState(ticker.change);
@@ -40,7 +43,7 @@ function StockRow({ ticker, socket }: StockRowProps) {
 
   // Observer to track if the row is visible in the viewport
   useEffect(() => {
-    if (!socket) return;
+    if (!socket || (activeSimulationId && ticker.isSimulated)) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -65,11 +68,11 @@ function StockRow({ ticker, socket }: StockRowProps) {
       observer.disconnect();
       socket.emit('leave-interest', [ticker.id]);
     };
-  }, [ticker.id, socket]);
+  }, [ticker.id, socket, activeSimulationId, ticker.isSimulated]);
 
   // Listen specifically for price-update broadcasts
   useEffect(() => {
-    if (!socket) return;
+    if (!socket || (activeSimulationId && ticker.isSimulated)) return;
 
     const handleUpdate = (updatedQuote: any) => {
       if (updatedQuote.ticker === ticker.id) {
@@ -84,7 +87,7 @@ function StockRow({ ticker, socket }: StockRowProps) {
     return () => {
       socket.off('price-update', handleUpdate);
     };
-  }, [ticker.id, socket]);
+  }, [ticker.id, socket, activeSimulationId, ticker.isSimulated]);
 
   const isUp = change >= 0;
 
@@ -124,6 +127,7 @@ function StockRow({ ticker, socket }: StockRowProps) {
 }
 
 export default function AllStocksPage() {
+  const { activeSimulationId, token } = useAuthStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [page, setPage] = useState(1);
@@ -155,27 +159,36 @@ export default function AllStocksPage() {
 
   // 3. React Query to fetch paginated directory listings
   const { isLoading, isFetching, refetch } = useQuery({
-    queryKey: ['tickers', debouncedQuery, page],
+    queryKey: ['tickers', debouncedQuery, page, activeSimulationId, token],
     queryFn: async () => {
-      const url = debouncedQuery.trim()
-        ? `${API_URL}/api/v1/market/tickers?q=${encodeURIComponent(debouncedQuery)}&page=${page}&limit=20`
-        : `${API_URL}/api/v1/market/tickers?page=${page}&limit=20`;
+      const url = activeSimulationId
+        ? `${API_URL}/api/v1/simulation/${activeSimulationId}/tickers`
+        : debouncedQuery.trim()
+          ? `${API_URL}/api/v1/market/tickers?q=${encodeURIComponent(debouncedQuery)}&page=${page}&limit=20`
+          : `${API_URL}/api/v1/market/tickers?page=${page}&limit=20`;
 
-      const response = await fetch(url);
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const response = await fetch(url, { headers });
       if (!response.ok) throw new Error('Failed to fetch stocks');
       
       const json = await response.json();
       const results = json.tickers || [];
 
-      if (results.length < 20) {
+      const finalResults = activeSimulationId && debouncedQuery.trim()
+        ? results.filter((t: TickerInfo) => t.id.toUpperCase().includes(debouncedQuery.toUpperCase()) || t.name.toUpperCase().includes(debouncedQuery.toUpperCase()))
+        : results;
+
+      if (finalResults.length < 20 || activeSimulationId) {
         setHasMore(false);
       }
 
       setTickersList((prev) => {
-        // Exclude duplicate tickers
         const existingIds = new Set(prev.map((t) => t.id));
-        const filteredNew = results.filter((t: TickerInfo) => !existingIds.has(t.id));
-        return page === 1 ? results : [...prev, ...filteredNew];
+        const filteredNew = finalResults.filter((t: TickerInfo) => !existingIds.has(t.id));
+        return page === 1 ? finalResults : [...prev, ...filteredNew];
       });
 
       return results;

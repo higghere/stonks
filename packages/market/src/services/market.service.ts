@@ -31,8 +31,14 @@ export class MarketService {
     this.redis.on('error', (err) => Logger.error('MarketService Redis Error', err));
     this.redis.connect().catch((err) => Logger.error('MarketService Redis Connection Failed', err));
 
-    // Real-world primary provider, falls back to Mock if connections fail
-    this.primaryProvider = new YahooFinanceProvider();
+    const providerType = config.get('MARKET_PROVIDER');
+    if (providerType === 'mock') {
+      Logger.info('[MARKET SERVICE] Using MockProvider as the primary market provider.');
+      this.primaryProvider = new MockProvider();
+    } else {
+      Logger.info('[MARKET SERVICE] Using YahooFinanceProvider as the primary market provider.');
+      this.primaryProvider = new YahooFinanceProvider();
+    }
     this.fallbackProvider = new MockProvider();
   }
 
@@ -95,10 +101,57 @@ export class MarketService {
     }
   }
 
+  public async getExchangeRate(from: string, to: string): Promise<number> {
+    const f = from.toUpperCase().trim();
+    const t = to.toUpperCase().trim();
+    if (f === t) return 1.0;
+
+    const cacheKey = `fx:${f}:${t}`;
+    try {
+      if (this.redis.isOpen) {
+        const cached = await this.redis.get(cacheKey);
+        if (cached) return parseFloat(cached);
+      }
+    } catch {}
+
+    const staticRates: Record<string, number> = {
+      USD: 1.0,
+      EUR: 1.08,
+      GBP: 1.27,
+      INR: 0.012,
+      AUD: 0.66,
+      CAD: 0.73,
+    };
+
+    let rate = 1.0;
+    try {
+      // Query Yahoo for fx ticker (e.g. GBPUSD=X)
+      const fxTicker = `${f}${t}=X`;
+      const fxQuote = await this.executeWithCircuitBreaker((provider) =>
+        provider.getQuote(fxTicker)
+      );
+      rate = fxQuote.price;
+    } catch {
+      // Fallback to static rates
+      const fromUsd = staticRates[f] || 1.0;
+      const toUsd = staticRates[t] || 1.0;
+      rate = fromUsd / toUsd;
+    }
+
+    try {
+      if (this.redis.isOpen) {
+        await this.redis.setEx(cacheKey, 3600, rate.toString()); // Cache FX rate for 1 hour
+      }
+    } catch {}
+
+    return rate;
+  }
+
   // --- Core API Interfaces ---
 
   public async getQuote(ticker: string): Promise<MarketQuote> {
-    const cacheKey = `quote:${ticker.toUpperCase()}`;
+    const sym = ticker.toUpperCase().trim();
+    const cacheKey = `quote:${sym}`;
     
     // Check cache
     try {
@@ -112,26 +165,165 @@ export class MarketService {
       Logger.error('Redis read error inside getQuote', err);
     }
 
+    const { prisma } = await import('@stock-market/database');
+    const tickerRec = await prisma.ticker.findUnique({
+      where: { id: sym }
+    });
+    const providerSymbol = tickerRec?.providerSymbol || sym;
+
     // Fetch via provider with circuit breaker
     const quote = await this.executeWithCircuitBreaker((provider) => 
-      provider.getQuote(ticker)
+      provider.getQuote(providerSymbol)
     );
+
+    // Map provider ticker symbol back to database ticker ID
+    quote.ticker = sym;
+
+    // Convert prices to USD if native currency is not USD and not already converted
+    const originalCurrency = tickerRec?.currency || 'USD';
+    if (originalCurrency !== 'USD' && !(quote as any).isConverted) {
+      try {
+        const fxRate = await this.getExchangeRate(originalCurrency, 'USD');
+        quote.price = parseFloat((quote.price * fxRate).toFixed(4));
+        quote.high = parseFloat((quote.high * fxRate).toFixed(4));
+        quote.low = parseFloat((quote.low * fxRate).toFixed(4));
+        quote.open = parseFloat((quote.open * fxRate).toFixed(4));
+        quote.previousClose = parseFloat((quote.previousClose * fxRate).toFixed(4));
+        quote.change = parseFloat((quote.change * fxRate).toFixed(4));
+        (quote as any).isConverted = true;
+      } catch (err) {
+        Logger.error(`[FX CONVERSION] getQuote USD conversion failed for ${sym}`, err);
+      }
+    }
 
     // Check alerts asynchronously
-    this.checkAlerts(ticker, quote.price).catch((err) => 
-      Logger.error(`Alert checks failed for ${ticker}`, err)
+    this.checkAlerts(sym, quote.price).catch((err) => 
+      Logger.error(`Alert checks failed for ${sym}`, err)
     );
 
-    // Save in cache (15 seconds)
+    // Save in cache (1s for mock, 5s for Yahoo)
+    const providerType = config.get('MARKET_PROVIDER');
+    const defaultCacheSec = providerType === 'mock' ? 1 : 5;
+    const QUOTE_CACHE_SEC = Number(process.env.QUOTE_CACHE_SEC) || defaultCacheSec;
+
     try {
       if (this.redis.isOpen) {
-        await this.redis.setEx(cacheKey, 15, JSON.stringify(quote));
+        await this.redis.setEx(cacheKey, QUOTE_CACHE_SEC, JSON.stringify(quote));
       }
     } catch (err) {
       Logger.error('Redis write error inside getQuote', err);
     }
 
     return quote;
+  }
+
+  public async getQuotes(tickers: string[]): Promise<Record<string, MarketQuote>> {
+    if (tickers.length === 0) return {};
+
+    const results: Record<string, MarketQuote> = {};
+    const missingTickers: string[] = [];
+
+    // 1. Check Redis cache first
+    try {
+      if (this.redis.isOpen) {
+        const cacheKeys = tickers.map(t => `quote:${t.toUpperCase().trim()}`);
+        const cachedVals = await this.redis.mGet(cacheKeys);
+        for (let i = 0; i < tickers.length; i++) {
+          const ticker = tickers[i].toUpperCase().trim();
+          const cached = cachedVals[i];
+          if (cached) {
+            results[ticker] = JSON.parse(cached) as MarketQuote;
+          } else {
+            missingTickers.push(tickers[i]);
+          }
+        }
+      } else {
+        missingTickers.push(...tickers);
+      }
+    } catch (err) {
+      Logger.error('Redis mGet error inside getQuotes', err);
+      missingTickers.push(...tickers);
+    }
+
+    if (missingTickers.length === 0) {
+      return results;
+    }
+
+    // 2. Resolve provider symbols from database for the missing tickers
+    const { prisma } = await import('@stock-market/database');
+    const dbTickers = await prisma.ticker.findMany({
+      where: { id: { in: missingTickers.map(t => t.toUpperCase().trim()) } }
+    });
+
+    const symbolToTickerMap: Record<string, string> = {};
+    const missingProviderSymbols: string[] = [];
+
+    for (const t of missingTickers) {
+      const sym = t.toUpperCase().trim();
+      const rec = dbTickers.find(d => d.id === sym);
+      const pSym = (rec?.providerSymbol && rec.providerSymbol.trim() !== '' ? rec.providerSymbol : sym).toUpperCase().trim();
+      symbolToTickerMap[pSym] = sym;
+      missingProviderSymbols.push(pSym);
+    }
+
+    // 3. Fetch missing tickers via provider in batch
+    let batchQuotes: Record<string, MarketQuote> = {};
+    try {
+      batchQuotes = await this.executeWithCircuitBreaker((provider) =>
+        provider.getQuotes(missingProviderSymbols)
+      );
+    } catch (err) {
+      Logger.warn(`Routing batch quote request to fallback provider due to error.`);
+      try {
+        batchQuotes = await this.fallbackProvider.getQuotes(missingProviderSymbols);
+      } catch {
+        // ignore
+      }
+    }
+
+    // 4. Cache results and merge into final results
+    const providerType = config.get('MARKET_PROVIDER');
+    const defaultCacheSec = providerType === 'mock' ? 1 : 5;
+    const QUOTE_CACHE_SEC = Number(process.env.QUOTE_CACHE_SEC) || defaultCacheSec;
+
+    for (const [pSym, quote] of Object.entries(batchQuotes)) {
+      const originalTicker = symbolToTickerMap[pSym.toUpperCase().trim()];
+      if (originalTicker) {
+        quote.ticker = originalTicker; // Rewrite ticker symbol back to database ID
+
+        // Convert prices to USD if native currency is not USD and not already converted
+        const rec = dbTickers.find(d => d.id === originalTicker);
+        const originalCurrency = rec?.currency || 'USD';
+        if (originalCurrency !== 'USD' && !(quote as any).isConverted) {
+          try {
+            const fxRate = await this.getExchangeRate(originalCurrency, 'USD');
+            quote.price = parseFloat((quote.price * fxRate).toFixed(4));
+            quote.high = parseFloat((quote.high * fxRate).toFixed(4));
+            quote.low = parseFloat((quote.low * fxRate).toFixed(4));
+            quote.open = parseFloat((quote.open * fxRate).toFixed(4));
+            quote.previousClose = parseFloat((quote.previousClose * fxRate).toFixed(4));
+            quote.change = parseFloat((quote.change * fxRate).toFixed(4));
+            (quote as any).isConverted = true;
+          } catch (err) {
+            Logger.error(`[FX CONVERSION] getQuotes USD conversion failed for ${originalTicker}`, err);
+          }
+        }
+
+        results[originalTicker] = quote;
+
+        // Cache asynchronously
+        const cacheKey = `quote:${originalTicker}`;
+        try {
+          if (this.redis.isOpen) {
+            await this.redis.setEx(cacheKey, QUOTE_CACHE_SEC, JSON.stringify(quote));
+          }
+        } catch (err) {
+          Logger.error(`Redis write error inside getQuotes for ${originalTicker}`, err);
+        }
+      }
+    }
+
+    return results;
   }
 
   public async getCompanyProfile(ticker: string): Promise<CompanyProfile> {
@@ -209,32 +401,97 @@ export class MarketService {
     from: number,
     to: number
   ): Promise<MarketHistoryBar[]> {
-    const cacheKey = `history:${ticker.toUpperCase()}:${resolution}:${from}:${to}`;
+    const sym = ticker.toUpperCase().trim();
+    const fromDate = new Date(from * 1000);
+    const toDate = new Date(to * 1000);
 
+    const { prisma } = await import('@stock-market/database');
+    const { Decimal } = await import('@prisma/client/runtime/library');
+
+    let bars: MarketHistoryBar[] = [];
+
+    // 1. Try reading candles from database first
     try {
-      if (this.redis.isOpen) {
-        const cached = await this.redis.get(cacheKey);
-        if (cached) {
-          return JSON.parse(cached) as MarketHistoryBar[];
+      const dbCandles = await prisma.oHLCCandle.findMany({
+        where: {
+          tickerId: sym,
+          timeframe: resolution,
+          timestamp: {
+            gte: fromDate,
+            lte: toDate,
+          },
+        },
+        orderBy: { timestamp: 'asc' },
+      });
+
+      if (dbCandles.length > 0) {
+        Logger.info(`[CANDLE STORAGE] Retrieved ${dbCandles.length} candles from DB for ${sym} (${resolution})`);
+        bars = dbCandles.map((c) => ({
+          time: Math.floor(c.timestamp.getTime() / 1000),
+          open: Number(c.open),
+          high: Number(c.high),
+          low: Number(c.low),
+          close: Number(c.close),
+          volume: Number(c.volume),
+        }));
+      }
+    } catch (err) {
+      Logger.error('[CANDLE STORAGE] Error reading candles from DB', err);
+    }
+
+    if (bars.length === 0) {
+      // 2. Fetch from provider
+      const history = await this.executeWithCircuitBreaker((provider) =>
+        provider.getHistory(sym, resolution, from, to)
+      );
+
+      // 3. Save/Backfill to database asynchronously
+      if (history.length > 0) {
+        (async () => {
+          try {
+            Logger.info(`[CANDLE STORAGE] Backfilling ${history.length} candles to DB for ${sym} (${resolution})`);
+            
+            const dataToInsert = history.map((bar) => ({
+              tickerId: sym,
+              timeframe: resolution,
+              open: new Decimal(bar.open),
+              high: new Decimal(bar.high),
+              low: new Decimal(bar.low),
+              close: new Decimal(bar.close),
+              volume: new Decimal(bar.volume),
+              timestamp: new Date(bar.time * 1000),
+            }));
+
+            await prisma.oHLCCandle.createMany({
+              data: dataToInsert,
+              skipDuplicates: true,
+            });
+          } catch (err) {
+            Logger.error('[CANDLE STORAGE] Error backfilling candles to DB', err);
+          }
+        })().catch((err) => Logger.error('[CANDLE STORAGE] Background task crashed', err));
+      }
+      bars = history;
+    }
+
+    // 4. Convert bars to USD if ticker's native currency is not USD
+    try {
+      const tickerRec = await prisma.ticker.findUnique({ where: { id: sym } });
+      const originalCurrency = tickerRec?.currency || 'USD';
+      if (originalCurrency !== 'USD') {
+        const fxRate = await this.getExchangeRate(originalCurrency, 'USD');
+        for (const bar of bars) {
+          bar.open = parseFloat((bar.open * fxRate).toFixed(4));
+          bar.high = parseFloat((bar.high * fxRate).toFixed(4));
+          bar.low = parseFloat((bar.low * fxRate).toFixed(4));
+          bar.close = parseFloat((bar.close * fxRate).toFixed(4));
         }
       }
     } catch (err) {
-      Logger.error('Redis read error inside getHistory', err);
+      Logger.error(`[FX CONVERSION] History USD conversion failed for ${sym}`, err);
     }
 
-    const history = await this.executeWithCircuitBreaker((provider) =>
-      provider.getHistory(ticker, resolution, from, to)
-    );
-
-    try {
-      if (this.redis.isOpen) {
-        await this.redis.setEx(cacheKey, 300, JSON.stringify(history)); // Cache for 5 minutes
-      }
-    } catch (err) {
-      Logger.error('Redis write error inside getHistory', err);
-    }
-
-    return history;
+    return bars;
   }
 
   public async searchTickers(

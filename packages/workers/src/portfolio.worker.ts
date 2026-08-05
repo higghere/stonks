@@ -47,6 +47,14 @@ export class PortfolioSnapshotWorker {
       Logger.error(`Portfolio snapshot job failed: ${job?.id}`, err);
     });
 
+    this.schedulerQueue.on('error', (err) => {
+      Logger.error('BullMQ Portfolio Scheduler Queue Error', err);
+    });
+
+    this.worker.on('error', (err) => {
+      Logger.error('BullMQ Portfolio Worker Error', err);
+    });
+
     // Schedule snapshot execution repeatable cron (every night at midnight: 0 0 * * *)
     this.scheduleNightlySnapshots().catch((err) =>
       Logger.error('Failed to schedule repeatable nightly portfolio snapshots', err)

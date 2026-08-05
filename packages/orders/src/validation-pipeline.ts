@@ -107,9 +107,8 @@ export class OrderValidationPipeline {
       }
     }
 
-    // 8. Validate inventory for SELL orders
+    // 8. Validate inventory / margin for SELL orders
     if (context.side === OrderSide.SELL) {
-      // Find active position (read-only projection helper)
       const position = await prisma.position.findUnique({
         where: {
           accountId_tickerId: {
@@ -119,19 +118,113 @@ export class OrderValidationPipeline {
         },
       });
 
-      if (!position || position.quantity.lt(new Decimal(context.quantity))) {
-        throw new ValidationError(
-          AppErrorCode.BAD_REQUEST,
-          `You do not hold enough shares of ${context.tickerId} to execute this sell order`,
-          {
-            holding: position ? position.quantity.toNumber() : 0,
-            requested: context.quantity,
-          }
-        );
+      const qtyExisting = position 
+        ? (position.isShort ? position.quantity.negated() : position.quantity)
+        : new Decimal(0);
+
+      const qtyResulting = qtyExisting.sub(new Decimal(context.quantity));
+
+      // If they own the stock and are just selling it (qtyResulting >= 0), it's a normal sell
+      if (qtyResulting.lt(0)) {
+        // Short selling is occurring
+        const resultingShortQty = qtyResulting.negated();
+
+        const executionPrice = context.type === OrderType.LIMIT ? context.price! : currentPrice;
+        
+        // Get current account margin status
+        const marginStatus = await this.getAccountMarginStatus(context.accountId);
+
+        const shortQtyChange = qtyExisting.lt(0) 
+          ? new Decimal(context.quantity)
+          : new Decimal(context.quantity).sub(qtyExisting);
+
+        const smvChange = shortQtyChange.mul(new Decimal(executionPrice));
+        const finalSMV = marginStatus.shortMarketValue.add(smvChange);
+
+        const commission = new Decimal(2.00);
+        const finalEquity = marginStatus.equity.sub(commission);
+
+        // Initial Margin Requirement: 50% of the final short market value
+        const initialMarginRequirement = finalSMV.mul(new Decimal(0.50));
+
+        if (finalEquity.lt(initialMarginRequirement)) {
+          throw new ValidationError(
+            AppErrorCode.ORDER_INSUFFICIENT_FUNDS,
+            `Insufficient initial margin to execute this short order. Required equity: $${initialMarginRequirement.toFixed(2)}, hypothetical equity: $${finalEquity.toFixed(2)}`,
+            {
+              required: initialMarginRequirement.toNumber(),
+              available: finalEquity.toNumber(),
+            }
+          );
+        }
       }
     }
 
     return { currentPrice, exchangeId: ticker.exchangeId };
+  }
+
+  public async getAccountMarginStatus(accountId: string): Promise<{
+    equity: Decimal;
+    shortMarketValue: Decimal;
+    longMarketValue: Decimal;
+    maintenanceRequirement: Decimal;
+  }> {
+    const account = await prisma.account.findUnique({
+      where: { id: accountId },
+      include: {
+        positions: {
+          include: {
+            ticker: true,
+          },
+        },
+      },
+    });
+
+    if (!account) {
+      throw new Error(`Account ${accountId} not found`);
+    }
+
+    let cash = account.cashBalance;
+    let longMarketValue = new Decimal(0);
+    let shortMarketValue = new Decimal(0);
+    let maintenanceRequirement = new Decimal(0);
+
+    for (const pos of account.positions) {
+      try {
+        const quote = await this.marketService.getQuote(pos.tickerId);
+        const price = new Decimal(quote.price);
+        const qty = pos.quantity;
+
+        if (pos.isShort) {
+          const smv = qty.mul(price);
+          shortMarketValue = shortMarketValue.add(smv);
+          maintenanceRequirement = maintenanceRequirement.add(smv.mul(new Decimal(0.30)));
+        } else {
+          longMarketValue = longMarketValue.add(qty.mul(price));
+        }
+      } catch (err) {
+        // Fallback to average price if quote is not available
+        const price = pos.averagePrice;
+        const qty = pos.quantity;
+
+        if (pos.isShort) {
+          const smv = qty.mul(price);
+          shortMarketValue = shortMarketValue.add(smv);
+          maintenanceRequirement = maintenanceRequirement.add(smv.mul(new Decimal(0.30)));
+        } else {
+          longMarketValue = longMarketValue.add(qty.mul(price));
+        }
+      }
+    }
+
+    const equity = cash.add(longMarketValue).sub(shortMarketValue);
+
+    return {
+      equity,
+      shortMarketValue,
+      longMarketValue,
+      maintenanceRequirement,
+    };
   }
 }
 export default OrderValidationPipeline;

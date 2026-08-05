@@ -10,12 +10,15 @@ import { prisma } from '@stock-market/database';
 import { initWorkers } from '@stock-market/workers';
 import { NotificationService } from '@stock-market/notifications';
 import { QuoteService, QuoteInterestService } from '@stock-market/market';
+import { marketEventBus, DomainEvent } from '@stock-market/shared';
 import { authRoutes } from './routes/auth.routes';
 import { marketRoutes } from './routes/market.routes';
 import { orderRoutes } from './routes/order.routes';
 import { portfolioRoutes } from './routes/portfolio.routes';
 import { watchlistRoutes } from './routes/watchlist.routes';
 import { alertRoutes } from './routes/alert.routes';
+import { simulationRoutes } from './routes/simulation.routes';
+import predictionRoutes from './routes/prediction.routes';
 import { errorMiddleware } from './middlewares/error.middleware';
 import { generalLimiter } from './middlewares/rate-limit.middleware';
 
@@ -38,6 +41,10 @@ const redisClient = createClient({
 
 redisClient.on('error', (err) => Logger.error('Redis client error', err));
 redisClient.on('connect', () => Logger.info('Connected to Redis'));
+
+const redisSubscriber = redisClient.duplicate();
+redisSubscriber.on('error', (err) => Logger.error('Redis subscriber client error', err));
+redisSubscriber.on('connect', () => Logger.info('Connected to Redis Subscriber'));
 
 // Cookie Parser Middleware (Manual - lightweight)
 app.use((req, res, next) => {
@@ -74,6 +81,8 @@ app.use('/api/v1/orders', orderRoutes);
 app.use('/api/v1/portfolio', portfolioRoutes);
 app.use('/api/v1/watchlist', watchlistRoutes);
 app.use('/api/v1/alerts', alertRoutes);
+app.use('/api/v1/simulation', simulationRoutes);
+app.use('/api/v1/predictions', predictionRoutes);
 
 // Welcome Endpoint
 app.get('/', (req, res) => {
@@ -194,10 +203,21 @@ const PORT = config.get('PORT');
 
 async function startServer() {
   try {
-    await redisClient.connect();
+    // Connect to Redis in the background without blocking server boot
+    redisClient.connect().catch((err) => {
+      Logger.warn('Redis background connection failed.', err);
+    });
+
+    redisSubscriber.connect().catch((err) => {
+      Logger.warn('Redis Subscriber background connection failed.', err);
+    });
 
     // Start background BullMQ workers
-    initWorkers();
+    try {
+      initWorkers();
+    } catch (err) {
+      Logger.warn('Failed to initialize BullMQ workers (likely due to missing Redis connection).', err);
+    }
 
     // Listen for price alerts and push to active Socket.io clients
     const notificationService = NotificationService.getInstance();
@@ -212,11 +232,54 @@ async function startServer() {
       });
     });
 
+    // Listen for catalog verification and notify watchlisted users
+    marketEventBus.on(DomainEvent.TICKER_VERIFIED, async (payload: { symbol: string }) => {
+      try {
+        const { prisma } = await import('@stock-market/database');
+        
+        // Find users with this symbol in their watchlist
+        const watchlistedUsers = await prisma.watchlistItem.findMany({
+          where: { tickerId: payload.symbol.toUpperCase() }
+        });
+
+        for (const item of watchlistedUsers) {
+          // Log activity log
+          await prisma.activityLog.create({
+            data: {
+              userId: item.userId,
+              message: `[WATCHLIST ALERT] Watchlisted ticker ${payload.symbol} is now verified and available for trading!`,
+            }
+          });
+
+          // Push live event via Socket.io
+          Logger.info(`WebSocket: Pushing catalog verification alert to user ${item.userId} for ${payload.symbol}`);
+          io.to(item.userId).emit('catalog-verified', {
+            symbol: payload.symbol,
+            message: `Watchlisted ticker ${payload.symbol} is now verified and available for trading!`
+          });
+        }
+      } catch (err) {
+        Logger.error('Failed to distribute ticker verification alerts', err);
+      }
+    });
+
     // Start intelligent quote streaming engine
     const quoteService = QuoteService.getInstance();
-    quoteService.startPolling((quote) => {
-      io.to(`interest:${quote.ticker}`).emit('price-update', quote);
-    });
+    quoteService.startPolling();
+
+    // Subscribe to Redis Pub/Sub ticks and forward to clients
+    try {
+      await redisSubscriber.subscribe('market:ticks', (message) => {
+        try {
+          const quote = JSON.parse(message);
+          io.to(`interest:${quote.ticker}`).emit('price-update', quote);
+        } catch (err) {
+          Logger.error('Failed to parse price tick from Redis Pub/Sub', err);
+        }
+      });
+    } catch (err) {
+      Logger.error('Failed to subscribe to market:ticks channel', err);
+    }
 
     // 14-minute keep-alive self-ping (prevents Render free tier spin-down for both API & Web)
     setInterval(async () => {

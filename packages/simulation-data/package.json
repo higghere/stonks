@@ -1,0 +1,13 @@
+{
+  "name": "@stock-market/simulation-data",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@stock-market/simulation-common": "^1.0.0"
+  }
+}

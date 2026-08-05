@@ -8,10 +8,10 @@
     "packages/*"
   ],
   "scripts": {
-    "dev:api": "npm run dev -w apps/api",
-    "dev:web": "npm run dev -w apps/web",
+    "dev:api": "npm run dev --prefix apps/api",
+    "dev:web": "npm run dev --prefix apps/web",
     "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
-    "start": "concurrently \"npm run start -w apps/api\" \"npm run start -w apps/web\"",
+    "start": "concurrently \"npm run start --prefix apps/api\" \"npm run start --prefix apps/web\"",
     "build": "npm run build --workspaces --if-present",
     "build:api": "npm run build -w @stock-market/shared -w @stock-market/config -w @stock-market/logger -w @stock-market/database -w @stock-market/auth -w @stock-market/notifications -w @stock-market/market -w @stock-market/market-catalog -w @stock-market/portfolio -w @stock-market/orders -w @stock-market/workers && npm run build --prefix apps/api",
     "build:web": "npm run build -w @stock-market/shared -w @stock-market/config -w @stock-market/logger -w @stock-market/database -w @stock-market/auth -w @stock-market/notifications -w @stock-market/market -w @stock-market/market-catalog -w @stock-market/portfolio -w @stock-market/orders -w @stock-market/workers && npm run build --prefix apps/web",

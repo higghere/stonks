@@ -30,8 +30,8 @@ interface Position {
   averagePrice: number;
   currentPrice: number;
   marketValue: number;
-  unrealizedPL: number;
-  unrealizedPLPercent: number;
+  unrealizedPl: number;
+  unrealizedPlPercent: number;
 }
 
 interface Order {
@@ -47,7 +47,7 @@ interface Order {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { token, user, logout } = useAuthStore();
+  const { token, user, logout, activeSimulationId } = useAuthStore();
   const setSession = useAuthStore((state) => state.setSession);
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -108,25 +108,41 @@ export default function DashboardPage() {
     isLoading: portfolioLoading,
     refetch: refetchPortfolio,
   } = useQuery({
-    queryKey: ['portfolio'],
+    queryKey: ['portfolio', activeSimulationId],
     queryFn: async () => {
-      const response = await fetch(`${API_URL}/api/v1/portfolio`, {
+      const path = activeSimulationId 
+        ? `/api/v1/simulation/${activeSimulationId}/portfolio`
+        : `/api/v1/portfolio`;
+      const response = await fetch(`${API_URL}${path}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (response.status === 401) {
+        logout();
+        router.push('/login');
+        throw new Error('Session expired');
+      }
       if (!response.ok) throw new Error('Failed to load portfolio');
       const json = await response.json();
-      return json.data;
+      return json.data || json.portfolio;
     },
     enabled: !!token,
   });
 
   // 3. Query User Orders
   const { data: ordersData, isLoading: ordersLoading, refetch: refetchOrders } = useQuery({
-    queryKey: ['orders'],
+    queryKey: ['orders', activeSimulationId],
     queryFn: async () => {
-      const response = await fetch(`${API_URL}/api/v1/orders`, {
+      const path = activeSimulationId 
+        ? `/api/v1/simulation/${activeSimulationId}/orders`
+        : `/api/v1/orders`;
+      const response = await fetch(`${API_URL}${path}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (response.status === 401) {
+        logout();
+        router.push('/login');
+        throw new Error('Session expired');
+      }
       if (!response.ok) throw new Error('Failed to load orders');
       const json = await response.json();
       return json.orders;
@@ -136,11 +152,17 @@ export default function DashboardPage() {
 
   // 4. Query Portfolio History snapshots
   const { data: historyData, refetch: refetchHistory } = useQuery({
-    queryKey: ['portfolio-history'],
+    queryKey: ['portfolio-history', activeSimulationId],
     queryFn: async () => {
+      if (activeSimulationId) return [];
       const response = await fetch(`${API_URL}/api/v1/portfolio/history`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (response.status === 401) {
+        logout();
+        router.push('/login');
+        throw new Error('Session expired');
+      }
       if (!response.ok) throw new Error('Failed to load portfolio history');
       const json = await response.json();
       return json.history;
@@ -155,6 +177,11 @@ export default function DashboardPage() {
       const response = await fetch(`${API_URL}/api/v1/watchlist`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (response.status === 401) {
+        logout();
+        router.push('/login');
+        throw new Error('Session expired');
+      }
       if (!response.ok) throw new Error('Failed to load watchlist');
       const json = await response.json();
       return json.watchlist;
@@ -169,6 +196,11 @@ export default function DashboardPage() {
       const response = await fetch(`${API_URL}/api/v1/alerts`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (response.status === 401) {
+        logout();
+        router.push('/login');
+        throw new Error('Session expired');
+      }
       if (!response.ok) throw new Error('Failed to load alerts');
       const json = await response.json();
       return json.alerts;
@@ -208,7 +240,7 @@ export default function DashboardPage() {
 
   // 7.1 Active Symbol Tracking (Register interest for holdings & watchlist)
   useEffect(() => {
-    if (!socket || !portfolioData) return;
+    if (!socket || !portfolioData || activeSimulationId) return;
 
     const watchlistSymbols = (watchlistData || []).map((w: any) => w.symbol);
     const positionSymbols = (portfolioData.positions || []).map((p: Position) => p.tickerId);
@@ -232,7 +264,7 @@ export default function DashboardPage() {
       }
       socket.off('price-update', handlePriceUpdate);
     };
-  }, [socket, portfolioData, watchlistData, refetchPortfolio, refetchWatchlist]);
+  }, [socket, portfolioData, watchlistData, refetchPortfolio, refetchWatchlist, activeSimulationId]);
 
   // 8. Handle Search input
   useEffect(() => {
@@ -242,19 +274,28 @@ export default function DashboardPage() {
     }
     const delay = setTimeout(async () => {
       try {
-        const response = await fetch(
-          `${API_URL}/api/v1/market/search?q=${encodeURIComponent(searchQuery)}`
-        );
+        const path = activeSimulationId
+          ? `/api/v1/simulation/${activeSimulationId}/tickers`
+          : `/api/v1/market/search?q=${encodeURIComponent(searchQuery)}`;
+        const headers: Record<string, string> = {};
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        const response = await fetch(`${API_URL}${path}`, { headers });
         if (response.ok) {
           const json = await response.json();
-          setSearchResults(json.results);
+          const list = json.results || json.tickers || [];
+          const filtered = activeSimulationId
+            ? list.filter((t: any) => t.symbol.toUpperCase().includes(searchQuery.toUpperCase()) || t.name.toUpperCase().includes(searchQuery.toUpperCase()))
+            : list;
+          setSearchResults(filtered);
         }
       } catch (err) {
         console.error(err);
       }
     }, 300);
     return () => clearTimeout(delay);
-  }, [searchQuery]);
+  }, [searchQuery, activeSimulationId]);
 
   const handleAddWatchlist = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -523,10 +564,10 @@ export default function DashboardPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-850 text-sm">
-                      {positions.map((pos) => {
-                        const isProfit = pos.unrealizedPL >= 0;
+                      {positions.map((pos, index) => {
+                        const isProfit = (pos.unrealizedPl ?? 0) >= 0;
                         return (
-                          <tr key={pos.id} className="hover:bg-slate-850/50 transition-colors">
+                          <tr key={pos.id || pos.tickerId || index} className="hover:bg-slate-850/50 transition-colors">
                             <td className="px-5 py-4">
                               <Link href={`/stock/${pos.tickerId}`} className="group">
                                 <div className="font-bold text-white font-mono group-hover:text-brand-500 transition-colors">{pos.tickerId}</div>
@@ -540,10 +581,10 @@ export default function DashboardPage() {
                             <td className={`px-5 py-4 text-right font-mono font-bold ${isProfit ? 'text-brand-500' : 'text-red-500'}`}>
                               <span className="flex items-center justify-end gap-1">
                                 {isProfit ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
-                                {isProfit ? '+' : ''}{pos.unrealizedPLPercent.toFixed(2)}%
+                                {isProfit ? '+' : ''}{(pos.unrealizedPlPercent ?? 0).toFixed(2)}%
                               </span>
                               <span className="block text-[10px] font-medium opacity-80 mt-0.5">
-                                {isProfit ? '+' : ''}${pos.unrealizedPL.toFixed(2)}
+                                {isProfit ? '+' : ''}${(pos.unrealizedPl ?? 0).toFixed(2)}
                               </span>
                             </td>
                           </tr>

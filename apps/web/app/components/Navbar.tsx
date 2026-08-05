@@ -11,12 +11,14 @@ const NAV_ITEMS = [
   { path: '/', label: 'Home' },
   { path: '/dashboard', label: 'Dashboard', requireAuth: true },
   { path: '/stocks', label: 'All Stocks' },
+  { path: '/simulation', label: 'Simulation', requireAuth: true },
+  { path: '/predictions', label: 'Predictions' },
 ];
 
 export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { token, user, logout } = useAuthStore();
+  const { token, user, logout, activeSimulationId, activeSimulationName, setSimulation } = useAuthStore();
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -30,7 +32,8 @@ export default function Navbar() {
   if (isAuthPage) return null;
 
   return (
-    <header className="border-b border-slate-900 bg-slate-950/80 backdrop-blur-md sticky top-0 z-50 w-full">
+    <>
+      <header className="border-b border-slate-900 bg-slate-950/80 backdrop-blur-md sticky top-0 z-50 w-full">
       <div className="max-w-7xl mx-auto px-6 py-3.5 flex justify-between items-center">
         
         {/* Brand Logo */}
@@ -39,7 +42,7 @@ export default function Navbar() {
             <TrendingUp className="text-brand-500 h-5 w-5" />
           </div>
           <span className="font-extrabold text-lg text-white font-outfit tracking-wide group-hover:text-slate-200 transition-colors">
-            Antigravity
+            Stock Market Simulation
           </span>
         </Link>
 
@@ -201,5 +204,23 @@ export default function Navbar() {
       </AnimatePresence>
 
     </header>
+    {mounted && activeSimulationId && (
+      <div className="bg-emerald-950/80 border-b border-emerald-800/40 text-emerald-300 text-xs py-2 px-6 flex justify-between items-center font-mono w-full sticky top-[61px] z-40 backdrop-blur-sm">
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span>Simulated Universe Active: <strong>{activeSimulationName || 'Sandbox'}</strong></span>
+        </div>
+        <button
+          onClick={() => {
+            setSimulation(null, null);
+            router.push('/dashboard');
+          }}
+          className="bg-emerald-900/60 hover:bg-emerald-900 border border-emerald-800 text-emerald-200 px-3 py-1 rounded-md text-[10px] transition-all"
+        >
+          Exit Simulation Mode
+        </button>
+      </div>
+    )}
+    </>
   );
 }

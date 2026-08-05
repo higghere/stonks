@@ -4,3 +4,7 @@ node_modules/
 dist/
 build/
 coverage/
+dump.rdb
+scratch/
+data_cache/
+*.tsbuildinfo

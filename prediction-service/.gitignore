@@ -1,0 +1,5 @@
+.env
+data_cache/
+checkpoints/
+__pycache__/
+*.pyc

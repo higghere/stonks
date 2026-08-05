@@ -23,6 +23,7 @@ const configSchema = z.object({
   FINNHUB_API_KEY: z.string().optional(),
   POLYGON_API_KEY: z.string().optional(),
   TWELVEDATA_API_KEY: z.string().optional(),
+  MARKET_PROVIDER: z.enum(['yahoo', 'mock']).default('yahoo'),
 });
 
 export type Config = z.infer<typeof configSchema>;

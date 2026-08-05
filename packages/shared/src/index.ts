@@ -7,6 +7,9 @@ export enum DomainEvent {
   POSITION_UPDATED = 'position.updated',
   PORTFOLIO_SNAPSHOT_CREATED = 'portfolio.snapshot_created',
   ALERT_TRIGGERED = 'alert.triggered',
+  ASSET_DISCOVERED = 'asset.discovered',
+  TICKER_CREATED = 'ticker.created',
+  TICKER_VERIFIED = 'ticker.verified',
 }
 
 export enum AssetType {
@@ -63,3 +66,9 @@ export interface AppErrorPayload {
   message: string;
   details?: any;
 }
+
+import { EventEmitter } from 'events';
+export const marketEventBus = new EventEmitter();
+// Max listeners set to 100 to prevent memory leak warnings in dev mode with hot reload
+marketEventBus.setMaxListeners(100);
+
