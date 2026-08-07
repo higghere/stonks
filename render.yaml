@@ -28,6 +28,8 @@ services:
           type: redis
           name: stock-market-redis
           property: connectionString
+      - key: PREDICTION_SERVICE_URL
+        value: https://stock-market-prediction-service.onrender.com
 
   # 2. Next.js Web Frontend (Web Service)
   - type: web
@@ -44,7 +46,19 @@ services:
       - key: NEXT_PUBLIC_API_URL
         value: https://stock-market-api-4iub.onrender.com
 
-  # 3. Managed Redis Cache (Defined under services block in Render Spec)
+  # 3. Python Financial Intelligence Microservice (Web Service)
+  - type: web
+    name: stock-market-prediction-service
+    env: python
+    plan: free
+    rootDir: prediction-service
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app/main.py
+    envVars:
+      - key: PORT
+        value: 8000
+
+  # 4. Managed Redis Cache (Defined under services block in Render Spec)
   - type: redis
     name: stock-market-redis
     plan: free

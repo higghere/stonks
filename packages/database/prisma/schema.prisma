@@ -126,6 +126,7 @@ model Ticker {
   alerts         Alert[]
   watchlistItems WatchlistItem[]
   ohlcCandles    OHLCCandle[]
+  predictions    PredictionRecord[]
 }
 
 
@@ -502,5 +503,38 @@ model PositionLot {
   remainingQuantity Decimal  @db.Decimal(18, 4)
   price             Decimal  @db.Decimal(18, 4)
   acquiredAt        DateTime @default(now())
+}
+
+model PredictionRecord {
+  id                    String              @id @default(uuid())
+  tickerId              String
+  ticker                Ticker              @relation(fields: [tickerId], references: [id], onDelete: Cascade)
+  manifestId            String              @unique
+  modelVersion          String
+  featureVersion        String
+  currentClose          Decimal             @db.Decimal(18, 4)
+  historicalReliability Float
+  currentConfidence     Float
+  dataCompleteness      Float
+  pred5dPrice           Decimal             @db.Decimal(18, 4)
+  pred5dReturn          Float
+  pred30dPrice          Decimal             @db.Decimal(18, 4)
+  pred30dReturn         Float
+  pred90dPrice          Decimal             @db.Decimal(18, 4)
+  pred90dReturn         Float
+  generatedAt           DateTime            @default(now())
+  outcomes              EvaluationOutcome[]
+}
+
+model EvaluationOutcome {
+  id                 String           @id @default(uuid())
+  predictionId       String
+  prediction         PredictionRecord @relation(fields: [predictionId], references: [id], onDelete: Cascade)
+  horizon            String           // "5d", "30d", "90d"
+  actualClose        Decimal          @db.Decimal(18, 4)
+  actualReturn       Float
+  errorMae           Float
+  directionalCorrect Boolean
+  evaluatedAt        DateTime         @default(now())
 }
 
